@@ -2,13 +2,20 @@
 
 A [wisp protocol](https://github.com/MercuryWorkshop/wisp-protocol) server implementation, written in NodeJS.
 
+This fork allows you to use a socks5 proxy (eg Cloudflare WARP, TOR, etc)
+
 ### Usage ✨
 
 You can integrate it into your existing node:http server pretty easily by just adding this to your code
 
 ```js
 httpServer.on("upgrade", (req, socket, head) => {
-    wisp.routeRequest(req, socket, head);
+    wisp.routeRequest(req, socket, head, {
+        proxy: {
+            host: '127.0.0.1',
+            port: 9050
+        }
+    });
 });
 ```
 

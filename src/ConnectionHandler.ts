@@ -9,6 +9,8 @@ import { Logger } from "./utils/Logger.js";
 import { handleWsProxy } from "./wsproxy.js";
 import { checkErrorCode } from "./utils/Error.js";
 
+import { SocksClient } from 'socks';
+
 const wss = new WebSocketServer({ noServer: true });
 const defaultOptions: WispOptions = { logLevel: LOG_LEVEL.INFO, pingInterval: 30 };
 // Accepts either routeRequest(ws) or routeRequest(request, socket, head) like bare
@@ -25,6 +27,10 @@ export async function routeRequest(
         // Compatibility with bare like "handle upgrade" syntax
         wss.handleUpgrade(wsOrIncomingMessage, socket as Socket, head, (ws: WebSocket): void => {
             if (!wsOrIncomingMessage.url?.endsWith("/")) {
+                // disable wsproxy
+                return;
+                // @ts-ignore
+
                 // if a URL ends with / then its not a wsproxy connection, its wisp
                 handleWsProxy(ws, wsOrIncomingMessage.url!);
                 return;
@@ -61,36 +67,67 @@ export async function routeRequest(
                 const connectFrame = FrameParsers.connectPacketParser(wispFrame.payload);
 
                 if (connectFrame.streamType === STREAM_TYPE.TCP) {
-                    // Initialize and register Socket that will handle this stream
-                    const client = new net.Socket();
-                    client.connect(connectFrame.port, connectFrame.hostname);
-
-                    connections.set(wispFrame.streamID, {
-                        client: client,
+                    let socketReady;
+                    const socketStatus = new Promise((resolve) => socketReady = resolve);
+                    const connector = {
+                        client: null as Socket | null,
                         buffer: 127,
-                    });
+                        ready: socketStatus,
+                    }
+                    connections.set(wispFrame.streamID, connector);
+
+                    if (options.proxy) {
+                        const info = SocksClient.createConnection({
+                            proxy: {
+                                host: options.proxy.host,
+                                port: options.proxy.port,
+                                type: 5,
+                            },
+
+                            command: 'connect',
+
+                            destination: {
+                                host: connectFrame.hostname,
+                                port: connectFrame.port,
+                            },
+                        });
+
+                        // get the socket from the proxy connection
+                        connector.client = (await info).socket;
+                    } else {
+                        // Initialize and register Socket that will handle this stream
+                        connector.client = new net.Socket();
+                        connector.client.connect(connectFrame.port, connectFrame.hostname);
+                    }
 
                     // Send Socket's data back to client
-                    client.on("data", function (data) {
+                    connector.client.on("data", function (data) {
                         ws.send(FrameParsers.dataPacketMaker(wispFrame, data));
                     });
 
                     // Close stream if there is some network error
-                    client.on("error", function (err) {
+                    connector.client.on("error", function (err) {
                         logger.error(
                             `An error occured in the connection to ${connectFrame.hostname} (${wispFrame.streamID}) with the message ${err.message}`,
                         );
                         ws.send(FrameParsers.closePacketMaker(wispFrame, checkErrorCode(err)));
                         connections.delete(wispFrame.streamID);
                     });
-                    
-                    client.on("close", function () {
+
+                    connector.client.on("close", function () {
                         if (connections.get(wispFrame.streamID)) {
                             ws.send(FrameParsers.closePacketMaker(wispFrame, 0x02));
                             connections.delete(wispFrame.streamID);
                         }
                     });
+
+                    // @ts-ignore
+                    socketReady();
                 } else if (connectFrame.streamType === STREAM_TYPE.UDP) {
+                    // disable UDP
+                    return;
+                    // @ts-ignore
+
                     let iplevel = net.isIP(connectFrame.hostname); // Can be 0: DNS NAME, 4: IPv4, 6: IPv6
                     let host = connectFrame.hostname;
 
@@ -102,9 +139,9 @@ export async function routeRequest(
                         } catch (e) {
                             logger.error(
                                 "Failure while trying to resolve hostname " +
-                                    connectFrame.hostname +
-                                    " with error: " +
-                                    e,
+                                connectFrame.hostname +
+                                " with error: " +
+                                e,
                             );
                             ws.send(FrameParsers.closePacketMaker(wispFrame, 0x42));
                             return; // we're done here, ignore doing anything to this message now.
@@ -157,6 +194,9 @@ export async function routeRequest(
 
             if (wispFrame.type === PACKET_TYPE.DATA) {
                 const stream = connections.get(wispFrame.streamID);
+                if (!stream) { return; }
+                await stream.ready;
+
                 if (stream && stream.client instanceof net.Socket) {
                     stream.client.write(wispFrame.payload);
                     stream.buffer--;
