@@ -30,4 +30,9 @@ export type WispOptions = {
         host: string;
         port: number;
     }
+
+    blacklist?: {
+        domains?: string[];
+        ips?: string[];
+    }
 };

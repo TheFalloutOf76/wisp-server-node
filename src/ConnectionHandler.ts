@@ -76,7 +76,28 @@ export async function routeRequest(
                     }
                     connections.set(wispFrame.streamID, connector);
 
-                    if (options.proxy) {
+                    if (options?.blacklist) {
+                        const isIp = net.isIP(connectFrame.hostname);
+                        if (!isIp && options.blacklist.domains?.includes(connectFrame.hostname)) {
+                            connections.delete(wispFrame.streamID);
+                            ws.send(FrameParsers.closePacketMaker(wispFrame, 0x03));
+                            return;
+                        }
+
+                        const resolvedIp = isIp ? connectFrame.hostname :
+                            (await Promise.any([
+                                dns.resolve4(connectFrame.hostname),
+                                dns.resolve6(connectFrame.hostname),
+                            ]).catch(() => { }))?.[0];
+
+                        if (resolvedIp && options.blacklist.ips?.includes(resolvedIp)) {
+                            connections.delete(wispFrame.streamID);
+                            ws.send(FrameParsers.closePacketMaker(wispFrame, 0x03));
+                            return;
+                        }
+                    }
+
+                    if (options?.proxy) {
                         const info = SocksClient.createConnection({
                             proxy: {
                                 host: options.proxy.host,
@@ -93,7 +114,13 @@ export async function routeRequest(
                         });
 
                         // get the socket from the proxy connection
-                        connector.client = (await info).socket;
+                        try {
+                            connector.client = (await info).socket;
+                        } catch (e) {
+                            connections.delete(wispFrame.streamID);
+                            ws.send(FrameParsers.closePacketMaker(wispFrame, 0x03));
+                            return;
+                        }
                     } else {
                         // Initialize and register Socket that will handle this stream
                         connector.client = new net.Socket();
