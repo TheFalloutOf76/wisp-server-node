@@ -2,7 +2,7 @@
 
 A [wisp protocol](https://github.com/MercuryWorkshop/wisp-protocol) server implementation, written in NodeJS.
 
-This fork allows you to use a socks5 proxy (eg Cloudflare WARP, TOR, etc)
+This fork allows you to use a socks5 proxy (eg Cloudflare WARP, TOR, etc), and use blacklists (ads, malware, etc)
 
 ### Usage ✨
 
@@ -14,6 +14,15 @@ httpServer.on("upgrade", (req, socket, head) => {
         proxy: {
             host: '127.0.0.1',
             port: 9050
+        },
+        blacklist: {
+            domains: [
+                "pagead2.googlesyndication.com",
+                "static.cloudflareinsights.com"
+            ],
+            ips: [
+                ""
+            ]
         }
     });
 });
